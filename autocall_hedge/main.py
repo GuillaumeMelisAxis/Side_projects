@@ -30,7 +30,7 @@ from autocall_hedge.viz import run_all_plots
 # CONFIG — Modifier ici
 # ═══════════════════════════════════════════════════════════════════════════════
 
-TICKER          = "^FCHI"      # Yahoo Finance ticker
+TICKER          = "^STOXX50E"      # Yahoo Finance ticker
 DATA_START      = "2018-01-01"     # Début des données historiques
 DATA_END        = "2023-12-31"     # Fin des données historiques
 PRICING_START   = "2019-01-02"     # Début du backtest de couverture

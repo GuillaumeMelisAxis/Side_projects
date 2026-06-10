@@ -127,9 +127,16 @@ class HedgePortfolio:
         q_straddle = -g0.vega / straddle0.vega if abs(straddle0.vega) > 1e-10 else 0.0
         q_underlying = -(g0.delta + q_straddle * straddle0.delta)
 
-        # Cash = V0 - coût initial du portefeuille de couverture
+        # ── Portefeuille AUTO-FINANCÉ ─────────────────────────────────────────
+        # Convention : le bureau émet l'autocall et reçoit V0 du client.
+        # Il utilise ce V0 pour financer les positions de couverture initiales.
+        # Bond (compte de financement) = V0 - coût des positions achetées.
+        # Si bond > 0 → on a du cash résiduel placé au taux r.
+        # Si bond < 0 → on emprunte au taux r.
+        # À chaque rebalancement, le trade marginal (achat/vente) est financé
+        # par emprunt/prêt sans injection de capital externe.
         hedge_cost = q_underlying * S_init + q_straddle * straddle0.price
-        cash = V0 - hedge_cost
+        bond = V0 - hedge_cost   # Compte obligataire (peut être négatif = emprunt)
 
         gamma_residual = g0.gamma + q_straddle * straddle0.gamma
 
@@ -143,8 +150,8 @@ class HedgePortfolio:
             q_straddle=q_straddle,
             straddle=straddle0,
             autocall_mtm=V0,
-            hedge_value=hedge_cost + cash,
-            cash=cash,
+            hedge_value=q_underlying * S_init + q_straddle * straddle0.price + bond,
+            cash=bond,
             replication_error=0.0,
             gamma_residual=gamma_residual,
         )
@@ -152,7 +159,7 @@ class HedgePortfolio:
 
         print(f"[Hedge] Init | S={S_init:.2f} | σ={sigma_init:.1%} | V0={V0:.2f}")
         print(f"         Δ={g0.delta:.4f} | Γ={g0.gamma:.6f} | ν={g0.vega:.4f}")
-        print(f"         q_underlying={q_underlying:.4f} | q_straddle={q_straddle:.4f}")
+        print(f"         q_underlying={q_underlying:.4f} | q_straddle={q_straddle:.4f} | bond={bond:.2f}")
 
         # ── Dates d'observation réelles (dates anniversaires exactes) ────────
         # On calcule les N dates d'observation à partir de pricing_start.
@@ -278,12 +285,20 @@ class HedgePortfolio:
             q_straddle_new = np.clip(q_straddle_raw, -10.0, 10.0)
             q_underlying_new = -(greeks.delta + q_straddle_new * straddle_hedge.delta)
 
-            cash_new = (
-                hedge_value_pre
-                - q_underlying_new * S
-                - q_straddle_new * straddle_hedge.price
+            # ── AUTO-FINANCEMENT : le bond est mis à jour par le coût marginal du trade ──
+            # bond(t) = bond(t-1) * exp(r*dt)                   [capitalisation]
+            #         - (dq_underlying * S + dq_straddle * straddle_price)  [coût du rebal]
+            # Toute vente de positions abonde le bond ; tout achat le débite.
+            # On ne réinjecte JAMAIS de capital externe.
+            dt_years = dt_days / 365.25
+            bond_accrued = prev.cash * np.exp(self.r * dt_years)
+            rebal_cost = (
+                (q_underlying_new - prev.q_underlying) * S
+                + (q_straddle_new - prev.q_straddle) * straddle_hedge.price
             )
-            hedge_value_post = q_underlying_new * S + q_straddle_new * straddle_hedge.price + cash_new
+            bond_new = bond_accrued - rebal_cost
+
+            hedge_value_post = q_underlying_new * S + q_straddle_new * straddle_hedge.price + bond_new
             gamma_residual = greeks.gamma + q_straddle_new * straddle_hedge.gamma
 
             state = HedgeState(
@@ -297,7 +312,7 @@ class HedgePortfolio:
                 straddle=straddle_hedge,
                 autocall_mtm=V,
                 hedge_value=hedge_value_post,
-                cash=cash_new,
+                cash=bond_new,
                 replication_error=replication_error,
                 gamma_residual=gamma_residual,
             )
